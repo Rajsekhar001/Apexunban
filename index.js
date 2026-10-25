@@ -1,30 +1,15 @@
-// server.js — Node 18+, koi dependency nahi
-// node server.js
-// token.json same folder me rakho
+// api/id.js — Vercel serverless + key validation
 
-const http = require("http");
-const fs   = require("fs");
-const { URL } = require("url");
+const DURATION     = 86400;
+const BANNED_ID    = "1234567890";
 
-const PORT        = process.env.PORT || 3000;
-const TOKEN_FILE  = "./token.json";
-const DURATION    = 86400;             // 24h timer
-const BANNED_ID   = "1234567890";      // fixed banned id
+// sirf yeh key(s) allowed
+const VALID_KEYS = new Set([
+  "b4bf868ef483c846973bd67385108fa13a50162b9587693fa9898479cedfa7fd",
+  // aur keys yahan add karo
+]);
 
-// token.json se token load karo
-function loadToken() {
-  try {
-    const raw = fs.readFileSync(TOKEN_FILE, "utf8");
-    const j   = JSON.parse(raw);
-    return j.access_token || "";
-  } catch (e) {
-    console.error("[!] token.json padhne me error:", e.message);
-    return "";
-  }
-}
-
-// ek hi global timer state — reset nahi hota
-let state = null;  // { started, expires }
+let state = null;
 
 function fmt(s) {
   const h  = String(Math.floor(s / 3600)).padStart(2, "0");
@@ -33,55 +18,38 @@ function fmt(s) {
   return `${h}:${m}:${ss}`;
 }
 
-const server = http.createServer((req, res) => {
+export default function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
-  if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
-  if (req.method !== "GET")     { res.writeHead(405); res.end('{"error":"method"}'); return; }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "GET")     return res.status(405).json({ error: "method" });
 
-  const u   = new URL(req.url, `http://${req.headers.host}`);
-  const key = u.searchParams.get("unben") || u.searchParams.get("uid");
+  const key = String(req.query.unben || req.query.uid || "");
+  if (!key) return res.status(400).json({ error: "missing unben" });
 
-  // sirf /id route
-  if (u.pathname !== "/id") {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end('{"error":"not_found"}');
-    return;
+  // === KEY VALIDATION ===
+  if (!VALID_KEYS.has(key)) {
+    return res.status(403).json({
+      error:  "invalid_key",
+      status: "denied",
+    });
   }
 
-  if (!key) {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end('{"error":"missing unben"}');
-    return;
-  }
-
-  const token = loadToken();
-  const t     = Math.floor(Date.now() / 1000);
-
+  const t = Math.floor(Date.now() / 1000);
   if (state === null) state = { started: t, expires: t + DURATION };
-
   const remaining = Math.max(0, state.expires - t);
 
-  const out = JSON.stringify({
+  return res.status(200).json({
     key,
     banned_id:  BANNED_ID,
-    token,
+    token:      process.env.ACCESS_TOKEN || "",
     status:     remaining === 0 ? "expired" : "active",
+    is_banned:  false,
     timer:      remaining,
     formatted:  fmt(remaining),
     expires_at: state.expires,
     started_at: state.started,
   });
-
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(out);
-
-  console.log(`[GET] /id?unben=${key} -> timer=${fmt(remaining)}`);
-});
-
-server.listen(PORT, () => {
-  console.log(`[+] chalu: http://localhost:${PORT}/id?unben=<key>`);
-  console.log(`[+] token file: ${TOKEN_FILE}`);
-});
+}
